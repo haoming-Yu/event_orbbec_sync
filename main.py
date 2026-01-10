@@ -1,13 +1,17 @@
 import os
 import sys
-import multiprocessing as mp
+import uuid
+import argparse
 import numpy as np
+import multiprocessing as mp
+from pathlib import Path
+from datetime import datetime
 
-def sync_processor_worker(slice_queue, o_queue_sync, stop_event):
+def sync_processor_worker(slice_queue, o_queue_sync, stop_event, record_enabled, output_directory):
     from sync_processor import SensorSynchronizer
 
     try:
-        synchronizer = SensorSynchronizer(slice_queue, o_queue_sync, stop_event)
+        synchronizer = SensorSynchronizer(slice_queue, o_queue_sync, stop_event, record_enabled, output_directory)
         synchronizer.sync_process()
     except Exception as e:
         print(f"Sync Process Error: {e}")
@@ -61,7 +65,7 @@ def orbbec_worker(o_queue, o_queue_sync, stop_event):
         o_cam.stop()
         print("Orbbec Process: Stopped.")
 
-def run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event):
+def run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event, record_enabled, output_directory):
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, 
         QVBoxLayout, QHBoxLayout, QGridLayout, 
@@ -229,9 +233,34 @@ def run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event):
         def toggle_sensors(self):
             if self.p_prophesee is None or not self.p_prophesee.is_alive():
                 stop_event.clear()
+                
+                if record_enabled:
+                    nonlocal output_directory
+                    if output_directory is None:
+                        output_directory = Path("./output")
+                    else:
+                        output_directory = Path(output_directory)
+
+                    if not output_directory.exists():
+                        output_directory.mkdir(parents=True, exist_ok=True)
+                        print(f"Created root output directory: {output_directory}")
+                    
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    random_id = str(uuid.uuid4())[:8]
+                    session_folder_name = f"session_{timestamp}_{random_id}"
+                    session_path = output_directory / session_folder_name
+
+                    frame_path = session_path / "frame"
+                    event_path = session_path / "event"
+
+                    frame_path.mkdir(parents=True, exist_ok=True)
+                    event_path.mkdir(parents=True, exist_ok=True)
+                    print(f"Folders created at: {session_path}")
+                    output_directory = session_path
+
                 self.p_prophesee = mp.Process(target=prophesee_worker, args=(p_queue, slice_queue, stop_event))
                 self.p_orbbec = mp.Process(target=orbbec_worker, args=(o_queue, o_queue_sync, stop_event))
-                self.p_sync_process = mp.Process(target=sync_processor_worker, args=(slice_queue, o_queue_sync, stop_event))
+                self.p_sync_process = mp.Process(target=sync_processor_worker, args=(slice_queue, o_queue_sync, stop_event, record_enabled, output_directory))
 
                 self.p_prophesee.daemon = True
                 self.p_orbbec.daemon = True
@@ -280,7 +309,7 @@ def run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event):
 
     # Apply environment scaling before app creation
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
-    os.environ["QT_SCALE_FACTOR"] = "1.0" # Adjusted for better fit
+    os.environ["QT_SCALE_FACTOR"] = "0.5" # Adjusted for better fit
 
     app = QApplication(sys.argv)
     win = MainWindow()
@@ -289,6 +318,15 @@ def run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event):
 
 # --- 3. MAIN EXECUTION ---
 if __name__ == "__main__":
+    # arguments
+    parser = argparse.ArgumentParser(description="Event Camera Reconstruction and Recording")
+    parser.add_argument("-r", "--record", action="store_true", help="record event slice with starter frames")
+    parser.add_argument("-d", "--output_directory", default=None, help="output path for h5 file with frames")
+    
+    args = parser.parse_args()
+
+    print(f"Store event slice with starter frames: {args.record}")
+
     try:
         mp.set_start_method('spawn', force=True)
     except RuntimeError: pass
@@ -300,6 +338,6 @@ if __name__ == "__main__":
     stop_event = mp.Event()
 
     try:
-        run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event)
+        run_ui(p_queue, o_queue, o_queue_sync, slice_queue, stop_event, args.record, args.output_directory)
     except KeyboardInterrupt:
         stop_event.set()

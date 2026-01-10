@@ -84,7 +84,15 @@ class OrbbecCamera:
         self.has_color = False
         try:
             c_profiles = self.pipeline.get_stream_profile_list(OBSensorType.COLOR_SENSOR)
-            self.config.enable_stream(c_profiles.get_default_video_stream_profile())
+            color_profile = c_profiles.get_default_video_stream_profile()
+            self.config.enable_stream(color_profile)
+
+            # get color intrinsics, the depth intrinsics are not used as it is projected to color
+            color_intrinsics = color_profile.get_intrinsic()
+            print("Color Intrinsics: {}".format(color_intrinsics))
+            color_distortion = color_profile.get_distortion()
+            print("Color Distortion: {}".format(color_distortion))
+
             self.has_color = True
         except:
             self.has_color = False
@@ -103,7 +111,7 @@ class OrbbecCamera:
         # there will be a delay of 14ms or so. 
         # Shut this down but use hardware sync, will shorten the duration to 2ms
         self.pipeline.start(self.config)
-        self.align = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM)
+        self.align = AlignFilter(align_to_stream=OBStreamType.COLOR_STREAM) # software D2C, for now the hardware D2C has some problems
         self.pc_filter = PointCloudFilter()
         self.pc_filter.set_camera_param(self.pipeline.get_camera_param())
 
@@ -134,6 +142,19 @@ class OrbbecCamera:
                 self.first_frame_log_flag = False
             if c_frame is not None:
                 c_img = frame_to_bgr_image(c_frame)
+                # just for debugging, python cpu code introduce too much delay
+                # alpha-blending the depth to color image to test D2C accuracy
+                # depth_data = np.frombuffer(d_frame.get_data(), dtype=np.uint16).reshape(
+                #     (d_frame.get_height(), d_frame.get_width())
+                # )
+                # depth_data = depth_data.astype(np.float32) * d_frame.get_depth_scale()
+                # min_depth = 20 # mm
+                # max_depth = 10000 # mm
+                # depth_data = np.clip(depth_data, min_depth, max_depth)
+                # d_img = cv2.normalize(depth_data, None, 0, 255, cv2.NORM_MINMAX)
+                # d_img = cv2.applyColorMap(d_img.astype(np.uint8), cv2.COLORMAP_JET)
+                # # blend
+                # c_img = cv2.addWeighted(c_img, 0.5, d_img, 0.5, 0)
             else:
                 return None, None, None, 0, 0
             
